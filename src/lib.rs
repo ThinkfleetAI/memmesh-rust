@@ -37,7 +37,7 @@ pub use lattice::Lattice;
 pub use memory::{Memory, Observe, ReflectOpts};
 pub use types::*;
 
-const DEFAULT_BASE_URL: &str = "https://memory.thinkfleet.ai";
+const DEFAULT_BASE_URL: &str = "https://app.memmesh.ai";
 
 pub(crate) struct Inner {
     http: reqwest::Client,
