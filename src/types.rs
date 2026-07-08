@@ -53,6 +53,23 @@ pub struct Insight {
     pub confidence: f64,
 }
 
+/// Outcome of ingesting one media item: the memories extracted from it plus the
+/// text the model read and where the raw bytes were kept.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngestMediaResult {
+    #[serde(default)]
+    pub saved: Vec<MemoryItem>,
+    #[serde(default)]
+    pub candidate_count: u32,
+    #[serde(default)]
+    pub extracted_text: String,
+    #[serde(default)]
+    pub modality: String,
+    #[serde(default)]
+    pub blob_uri: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReflectResult {

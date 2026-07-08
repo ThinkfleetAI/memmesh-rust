@@ -2,10 +2,13 @@
 
 use std::sync::Arc;
 
+use base64::Engine as _;
 use reqwest::Method;
 use serde_json::{json, Value};
 
-use crate::{DedupResult, Error, Inner, MemoryItem, ReflectResult, SearchResult, Subject};
+use crate::{
+    DedupResult, Error, IngestMediaResult, Inner, MemoryItem, ReflectResult, SearchResult, Subject,
+};
 
 /// Accessor for the memory API. Get one via [`crate::MemMesh::memory`].
 pub struct Memory {
@@ -23,6 +26,18 @@ pub struct Observe {
     pub category: Option<String>,
     pub activity_type: Option<String>,
     pub occurred_at: Option<String>,
+}
+
+/// A media item to ingest. Fill `media` + `mime_type`; the rest are optional
+/// attribution recorded on the resulting memories' provenance.
+#[derive(Debug, Default)]
+pub struct IngestMedia {
+    pub media: Vec<u8>,
+    pub mime_type: String,
+    pub user_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub session_id: Option<String>,
+    pub source: Option<String>,
 }
 
 /// Options for a reflection pass.
@@ -59,6 +74,30 @@ impl Memory {
             body["category"] = json!(cat);
         }
         self.c.send(Method::POST, "/admin/memory", Some(&body)).await
+    }
+
+    /// Ingest an image / audio / document. The engine extracts text (vision,
+    /// transcription, or OCR via LiteLLM) and runs it through the observe
+    /// pipeline, so the result is real memories — not just a stored file.
+    /// Requires multimodal to be enabled on the engine.
+    pub async fn ingest_media(&self, m: IngestMedia) -> Result<IngestMediaResult, Error> {
+        let mut body = json!({
+            "dataBase64": base64::engine::general_purpose::STANDARD.encode(&m.media),
+            "mimeType": m.mime_type,
+        });
+        if let Some(u) = m.user_id {
+            body["userId"] = json!(u);
+        }
+        if let Some(a) = m.agent_id {
+            body["agentId"] = json!(a);
+        }
+        if let Some(s) = m.session_id {
+            body["sessionId"] = json!(s);
+        }
+        if let Some(s) = m.source {
+            body["source"] = json!(s);
+        }
+        self.c.send(Method::POST, "/memory/media", Some(&body)).await
     }
 
     /// Seed a memory directly.
