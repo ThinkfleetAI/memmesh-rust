@@ -70,6 +70,15 @@ impl Memory {
             "source": "admin_created",
             "metadata": md,
         });
+        if let Some(t) = &o.occurred_at {
+            // Event time, not ingest time. `validFrom` is the field behavior
+            // mining buckets day-of-week / hour-of-day on, so this is what makes
+            // a backfill work: without it every historical row lands at the
+            // moment of import and the mined patterns describe the import job
+            // rather than the data. The metadata copy above is kept only for
+            // readers that already look for it.
+            body["validFrom"] = json!(t);
+        }
         if let Some(cat) = o.category {
             body["category"] = json!(cat);
         }
@@ -106,9 +115,55 @@ impl Memory {
         self.c.send(Method::POST, "/admin/memory", Some(&body)).await
     }
 
+    /// Seed a memory that became true at a specific point in the past.
+    ///
+    /// `occurred_at` (RFC3339) sets event time. Behavior mining buckets patterns
+    /// by it, so any back-dated seed must go through here rather than `create`,
+    /// which defaults event time to now.
+    pub async fn create_at(
+        &self,
+        content: &str,
+        type_: &str,
+        occurred_at: &str,
+    ) -> Result<MemoryItem, Error> {
+        let body = json!({
+            "content": content,
+            "type": type_,
+            "scope": "project",
+            "importance": 5,
+            "validFrom": occurred_at,
+        });
+        self.c.send(Method::POST, "/admin/memory", Some(&body)).await
+    }
+
+    /// Fetch a single memory by id.
+    ///
+    /// The point-lookup counterpart to `list`/`search`: without it a caller
+    /// holding a memory id (from a pattern's `sourceMemoryIds`, an audit log, a
+    /// webhook) had no way to resolve it and had to page `list` hoping the row
+    /// was still on one.
+    pub async fn get(&self, id: &str) -> Result<MemoryItem, Error> {
+        self.c
+            .send::<Value, MemoryItem>(Method::GET, &format!("/admin/memory/{id}"), None)
+            .await
+    }
+
     /// Hybrid semantic + keyword search.
     pub async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchResult>, Error> {
-        let body = json!({"query": query, "limit": limit});
+        self.search_paged(query, limit, 0).await
+    }
+
+    /// Search a specific page of results — bump `offset` to page through.
+    pub async fn search_paged(
+        &self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SearchResult>, Error> {
+        let mut body = json!({"query": query, "limit": limit});
+        if offset > 0 {
+            body["offset"] = json!(offset);
+        }
         self.c.send(Method::POST, "/admin/memory/search", Some(&body)).await
     }
 
