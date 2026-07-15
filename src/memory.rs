@@ -16,6 +16,23 @@ pub struct Memory {
 }
 
 /// An event to observe. Fill the fields you need; the rest default.
+///
+/// `metadata` carries any structured fields the mining engine reads off the
+/// event. Notably, the RFM **Monetary** score sums a numeric `amount` (or
+/// `value` / `total`, or a `lineItems` array) — a price written only into
+/// `content` is not parsed, so set it here:
+///
+/// ```no_run
+/// # use memmesh::{memory::Observe, Subject};
+/// # use serde_json::json;
+/// Observe {
+///     subject: Some(Subject::new("contact", "sarah")),
+///     content: "Order — pizza".into(),
+///     activity_type: Some("order_placed".into()),
+///     metadata: Some(json!({ "amount": 42.0 })),
+///     ..Default::default()
+/// };
+/// ```
 #[derive(Debug, Default)]
 pub struct Observe {
     pub subject: Option<Subject>,
@@ -26,6 +43,9 @@ pub struct Observe {
     pub category: Option<String>,
     pub activity_type: Option<String>,
     pub occurred_at: Option<String>,
+    /// Extra structured fields merged into the event metadata (e.g.
+    /// `{ "amount": 42.0 }` for RFM monetary, `entityIds`, `lineItems`).
+    pub metadata: Option<Value>,
 }
 
 /// A media item to ingest. Fill `media` + `mime_type`; the rest are optional
@@ -61,6 +81,17 @@ impl Memory {
         }
         if let Some(t) = &o.occurred_at {
             md["occurredAt"] = json!(t);
+        }
+        // Merge caller-supplied metadata (amount, entityIds, lineItems, ...).
+        // Applied last so caller keys win, matching the Go / Python / .NET / TS
+        // SDKs' observe merge order.
+        if let (Some(extra), Some(dst)) = (
+            o.metadata.as_ref().and_then(Value::as_object),
+            md.as_object_mut(),
+        ) {
+            for (k, v) in extra {
+                dst.insert(k.clone(), v.clone());
+            }
         }
         let mut body = json!({
             "content": o.content,
