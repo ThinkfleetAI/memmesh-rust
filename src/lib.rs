@@ -34,7 +34,7 @@ pub mod resources;
 pub use context::Context;
 pub use error::Error;
 pub use lattice::Lattice;
-pub use memory::{IngestMedia, Memory, Observe, ReflectOpts};
+pub use memory::{render_procedure_content, IngestMedia, Memory, Observe, Procedure, ReflectOpts};
 pub use types::*;
 
 const DEFAULT_BASE_URL: &str = "https://app.memmesh.ai";

@@ -7,7 +7,8 @@ use reqwest::Method;
 use serde_json::{json, Value};
 
 use crate::{
-    DedupResult, Error, IngestMediaResult, Inner, MemoryItem, ReflectResult, SearchResult, Subject,
+    DedupResult, Error, IngestMediaResult, Inner, MemoryItem, PrecedencePolicy, ProcedureStep,
+    ReflectResult, ReviewQueueItem, SearchResult, Subject,
 };
 
 /// Accessor for the memory API. Get one via [`crate::MemMesh::memory`].
@@ -67,6 +68,44 @@ pub struct ReflectOpts {
     pub max_sources: Option<u32>,
     pub max_insights: Option<u32>,
     pub dry_run: bool,
+}
+
+/// A procedure to author — "how this job is done here."
+#[derive(Debug, Default)]
+pub struct Procedure {
+    pub goal: String,
+    pub when_to_use: Option<String>,
+    pub steps: Vec<ProcedureStep>,
+    pub failure_modes: Vec<String>,
+    /// Heading used when the procedure is injected.
+    pub category: Option<String>,
+    pub scope: Option<String>,
+    pub importance: Option<i64>,
+}
+
+/// Render a procedure into the injectable `content` string — identical to the
+/// engine-side renderer, so client-authored content matches the server.
+pub fn render_procedure_content(p: &Procedure) -> String {
+    let mut lines = vec![format!("Goal: {}", p.goal.trim())];
+    if let Some(w) = p.when_to_use.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        lines.push(format!("When: {w}"));
+    }
+    lines.push("Steps:".to_string());
+    for (i, s) in p.steps.iter().enumerate() {
+        let suffix = match s.pitfall.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            Some(p) => format!(" (watch out: {p})"),
+            None => String::new(),
+        };
+        lines.push(format!("{}. {}{}", i + 1, s.text.trim(), suffix));
+    }
+    let failures: Vec<&str> = p.failure_modes.iter().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    if !failures.is_empty() {
+        lines.push("Avoid:".to_string());
+        for f in failures {
+            lines.push(format!("- {f}"));
+        }
+    }
+    lines.join("\n")
 }
 
 impl Memory {
@@ -179,6 +218,52 @@ impl Memory {
             .await
     }
 
+    /// Author a procedure ("how this job is done here"). Stored as a
+    /// `procedure` memory: the structured shape on `metadata` and the rendered
+    /// how-to on `content`, so retrieval injects it as an explicit exemplar.
+    pub async fn create_procedure(&self, p: Procedure) -> Result<MemoryItem, Error> {
+        let mut metadata = json!({ "goal": p.goal, "steps": p.steps });
+        if let Some(w) = &p.when_to_use {
+            metadata["whenToUse"] = json!(w);
+        }
+        if !p.failure_modes.is_empty() {
+            metadata["failureModes"] = json!(p.failure_modes);
+        }
+        let mut body = json!({
+            "content": render_procedure_content(&p),
+            "type": "procedure",
+            "scope": p.scope.clone().unwrap_or_else(|| "project".into()),
+            "importance": p.importance.unwrap_or(7),
+            "metadata": metadata,
+        });
+        if let Some(cat) = &p.category {
+            body["category"] = json!(cat);
+        }
+        self.c.send(Method::POST, "/admin/memory", Some(&body)).await
+    }
+
+    /// The adjudication queue — everything the system is unsure about. Each row
+    /// carries a `review_reason` (pending / flagged / low_confidence / stale).
+    pub async fn list_pending_review(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ReviewQueueItem>, Error> {
+        let path = format!("/admin/memory/review?limit={limit}&offset={offset}");
+        self.c.send::<Value, _>(Method::GET, &path, None).await
+    }
+
+    /// Get the project's memory precedence policy — which memory wins when two
+    /// disagree. Falls back to the default ladder when unset.
+    pub async fn get_precedence(&self) -> Result<PrecedencePolicy, Error> {
+        self.c.send::<Value, _>(Method::GET, "/admin/memory/precedence", None).await
+    }
+
+    /// Save the precedence policy. Requires the Memory Steward role.
+    pub async fn set_precedence(&self, policy: &PrecedencePolicy) -> Result<PrecedencePolicy, Error> {
+        self.c.send(Method::PUT, "/admin/memory/precedence", Some(policy)).await
+    }
+
     /// Hybrid semantic + keyword search.
     pub async fn search(&self, query: &str, limit: u32) -> Result<Vec<SearchResult>, Error> {
         self.search_paged(query, limit, 0).await
@@ -245,5 +330,27 @@ impl Memory {
         self.c
             .send(Method::POST, "/admin/memory/prefetch-related", Some(&body))
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_procedure_content, Procedure};
+    use crate::ProcedureStep;
+
+    #[test]
+    fn renders_procedure() {
+        let p = Procedure {
+            goal: "Refund a charge".into(),
+            when_to_use: Some("double charge".into()),
+            steps: vec![
+                ProcedureStep { text: "Find it".into(), pitfall: None },
+                ProcedureStep { text: "Refund".into(), pitfall: Some("never twice".into()) },
+            ],
+            failure_modes: vec!["wrong card".into(), "  ".into()],
+            ..Default::default()
+        };
+        let want = "Goal: Refund a charge\nWhen: double charge\nSteps:\n1. Find it\n2. Refund (watch out: never twice)\nAvoid:\n- wrong card";
+        assert_eq!(render_procedure_content(&p), want);
     }
 }

@@ -32,6 +32,42 @@ pub struct MemoryItem {
     pub superseded_by_id: Option<String>,
 }
 
+/// A review-queue row: a memory plus why it needs a steward's attention.
+/// `review_reason` is one of `pending` / `flagged` / `low_confidence` / `stale`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewQueueItem {
+    #[serde(flatten)]
+    pub memory: MemoryItem,
+    pub review_reason: String,
+}
+
+/// One step of a procedure. `pitfall` is an optional inline warning.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcedureStep {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pitfall: Option<String>,
+}
+
+/// Category-level precedence exception: for this category, this tier wins.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrecedenceOverride {
+    pub category: String,
+    pub winning_tier: String,
+}
+
+/// Which memory wins when two disagree. Default ladder: human_verified > local
+/// > licensed_brain > base.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrecedencePolicy {
+    pub default_order: Vec<String>,
+    pub scope_nearest_wins: bool,
+    pub overrides: Vec<PrecedenceOverride>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SearchResult {
     pub id: String,
