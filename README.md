@@ -4,6 +4,16 @@ Official **Rust** SDK for **[MemMesh](https://memmesh.ai)** — memory + predict
 for AI agents. Async (`reqwest`/`tokio`), semantic recall, a bi-temporal
 knowledge graph, belief revision, reflection, and calibrated forecasting.
 
+Add it to your `Cargo.toml`:
+
+```toml
+[dependencies]
+memmesh = "0.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+or:
+
 ```bash
 cargo add memmesh
 ```
@@ -46,9 +56,9 @@ async fn main() -> Result<(), memmesh::Error> {
 ## Surface
 
 `mm.memory()` (observe/create/search/delete/confirm/**reflect**/**prefetch_related**/dedup) ·
-`mm.lattice()` (predict/mine/profile/calibration) ·
-`mm.context()` (build/**batch_build**/**query_graph**) ·
-`mm.events()` · `mm.alerts()` · `mm.learning()` · `mm.compliance()` · `mm.health()`.
+`mm.lattice()` (extract_patterns/mine_memories/get_pattern/list_patterns/get_context/run_monitor_tick/get_monitor_status/predict/predict_target/get_profile/get_cohort/predict_by_cohort/estimate/get_calibration) ·
+`mm.context()` (build/**build_for**/batch_build/query_graph) ·
+`mm.events()` · `mm.alerts()` · `mm.learning()` (record_decision/record_outcome/get_outcomes/get_effectiveness) · `mm.behaviors()` (discover) · `mm.compliance()` · `mm.health()`.
 
 Errors are [`memmesh::Error`] (`Http`, `Decode`, `Api { status, body }`).
 
