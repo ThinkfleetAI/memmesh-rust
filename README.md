@@ -27,10 +27,10 @@ use memmesh::{MemMesh, Subject, Observe, ReflectOpts};
 async fn main() -> Result<(), memmesh::Error> {
     let mm = MemMesh::new("sk-...", "proj_...");
 
-    // Remember something
+    // Remember something — hand the engine the raw turn and let it extract
+    // what's worth keeping (returns { saved, candidate_count }).
     mm.memory().observe(Observe {
-        subject: Some(Subject::new("contact", "sarah")),
-        content: "Prefers email over phone.".into(),
+        text: Some("Sarah prefers email over phone.".into()),
         ..Default::default()
     }).await?;
 

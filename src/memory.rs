@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 
 use crate::{
     BackfillEmbeddingsResult, ConsolidateResult, DedupResult, Error, Explanation,
-    IngestMediaResult, Inner, MemoryFeedback, MemoryItem, MemoryStats, PrecedencePolicy,
-    ProcedureStep, ReflectResult, ReviewQueueItem, SearchResult, Subject,
+    IngestMediaResult, Inner, MemoryFeedback, MemoryItem, MemoryStats, ObserveResponse,
+    PrecedencePolicy, ProcedureStep, ReflectResult, ReviewQueueItem, SearchResult, Subject,
 };
 
 /// Largest page `GET /admin/memory` will serve — the route rejects anything
@@ -42,7 +42,18 @@ pub struct Memory {
 /// ```
 #[derive(Debug, Default)]
 pub struct Observe {
+    /// Raw message text — the PRIMARY field. Send the whole turn verbatim; the
+    /// engine runs extraction (heuristic + optional LLM) and keeps only what's
+    /// worth remembering, dropping filler. Prefer this over `content`. When set,
+    /// `observe` posts to `/memory/observe` and the rest of the structured
+    /// fields (`subject`, `type_`, `scope`, ...) are ignored — the engine
+    /// resolves them during extraction.
+    pub text: Option<String>,
+    /// Who said `text` — defaults to `"user"`. Only used on the `text` path.
+    pub role: Option<String>,
     pub subject: Option<Subject>,
+    /// DEPRECATED — a pre-decided fact stored verbatim, bypassing extraction.
+    /// Prefer `text` and let the engine decide what to keep.
     pub content: String,
     pub type_: Option<String>,
     pub scope: Option<String>,
@@ -232,7 +243,36 @@ pub fn render_procedure_content(p: &Procedure) -> String {
 
 impl Memory {
     /// Record that something happened (the primary agent ingestion call).
-    pub async fn observe(&self, o: Observe) -> Result<MemoryItem, Error> {
+    ///
+    /// PRIMARY path — set [`Observe::text`]: the raw turn is POSTed to
+    /// `/memory/observe`, where the engine runs the Observe pipeline (extract →
+    /// dedupe → budget) and returns only what's worth keeping. Filler comes back
+    /// as `saved: []` (`candidate_count: 0`) — that's success, not an error.
+    ///
+    /// LEGACY path — leave `text` empty and set [`Observe::content`]: the fact is
+    /// stored verbatim via the admin-create route (no extraction) and wrapped as
+    /// a single-item `ObserveResponse`.
+    pub async fn observe(&self, o: Observe) -> Result<ObserveResponse, Error> {
+        // PRIMARY path: hand the engine the raw turn and let it decide what to
+        // keep. `/memory/observe` returns { saved, candidateCount } directly.
+        if let Some(text) = o.text.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let mut body = json!({
+                "text": text,
+                "role": o.role.clone().unwrap_or_else(|| "user".into()),
+            });
+            if let Some(t) = &o.occurred_at {
+                body["occurredAt"] = json!(t);
+            }
+            return self.c.send(Method::POST, "/memory/observe", Some(&body)).await;
+        }
+        // LEGACY path: caller handed a pre-decided fact. Require it to be
+        // non-empty — with neither `text` nor `content` there's nothing to store.
+        if o.content.trim().is_empty() {
+            return Err(Error::Validation {
+                status: 400,
+                message: "observe requires `text` (preferred) or `content`".into(),
+            });
+        }
         let mut md = json!({});
         if let Some(s) = &o.subject {
             md["subject"] = json!(s);
@@ -274,7 +314,8 @@ impl Memory {
         if let Some(cat) = o.category {
             body["category"] = json!(cat);
         }
-        self.c.send(Method::POST, "/admin/memory", Some(&body)).await
+        let item: MemoryItem = self.c.send(Method::POST, "/admin/memory", Some(&body)).await?;
+        Ok(ObserveResponse { saved: vec![item], candidate_count: 1 })
     }
 
     /// Ingest an image / audio / document. The engine extracts text (vision,
@@ -1125,6 +1166,85 @@ mod tests {
         // Unset options are omitted, not sent as null.
         assert!(b.get("threshold").is_none());
         assert!(b.get("scanLimit").is_none());
+    }
+
+    #[tokio::test]
+    async fn observe_text_posts_to_observe_route() {
+        // PRIMARY path: raw text goes to the engine's Observe pipeline.
+        let body = format!(r#"{{"saved":[{}],"candidateCount":3}}"#, item_json("m1"));
+        let (base, rx) = mock_server(vec![body]);
+        let mm = client(&base);
+        let res = mm
+            .memory()
+            .observe(Observe {
+                text: Some("Sarah prefers email over phone.".into()),
+                occurred_at: Some("2024-01-02T00:00:00Z".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(res.saved.len(), 1);
+        assert_eq!(res.saved[0].id, "m1");
+        assert_eq!(res.candidate_count, 3);
+        let req = rx.recv().unwrap();
+        assert_eq!(req.method, "POST");
+        assert!(req.path.ends_with("/memory/observe"));
+        // Not the verbatim admin-create route.
+        assert!(!req.path.contains("/admin/memory"));
+        let b: Value = serde_json::from_str(&req.body).unwrap();
+        assert_eq!(b["text"], "Sarah prefers email over phone.");
+        assert_eq!(b["role"], "user"); // defaulted
+        assert_eq!(b["occurredAt"], "2024-01-02T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn observe_filler_returns_empty_saved() {
+        // Filler: the engine kept nothing — success with saved: [], not an error.
+        let body = json!({ "saved": [], "candidateCount": 0 }).to_string();
+        let (base, _rx) = mock_server(vec![body]);
+        let mm = client(&base);
+        let res = mm
+            .memory()
+            .observe(Observe { text: Some("ok".into()), ..Default::default() })
+            .await
+            .unwrap();
+        assert!(res.saved.is_empty());
+        assert_eq!(res.candidate_count, 0);
+    }
+
+    #[tokio::test]
+    async fn observe_content_wraps_single_item() {
+        // LEGACY path: pre-decided fact stored verbatim, wrapped as one item.
+        let (base, rx) = mock_server(vec![item_json("m1")]);
+        let mm = client(&base);
+        let res = mm
+            .memory()
+            .observe(Observe {
+                content: "Prefers email.".into(),
+                occurred_at: Some("2024-01-02T00:00:00Z".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(res.saved.len(), 1);
+        assert_eq!(res.saved[0].id, "m1");
+        assert_eq!(res.candidate_count, 1);
+        let req = rx.recv().unwrap();
+        assert_eq!(req.method, "POST");
+        assert!(req.path.ends_with("/admin/memory"));
+        let b: Value = serde_json::from_str(&req.body).unwrap();
+        assert_eq!(b["content"], "Prefers email.");
+        assert_eq!(b["source"], "admin_created");
+        assert_eq!(b["validFrom"], "2024-01-02T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn observe_requires_text_or_content() {
+        // Neither text nor content: a clear client-side error, no request sent.
+        let (base, _rx) = mock_server(vec![]);
+        let mm = client(&base);
+        let err = mm.memory().observe(Observe::default()).await.unwrap_err();
+        assert!(matches!(err, Error::Validation { status: 400, .. }));
     }
 
     #[tokio::test]

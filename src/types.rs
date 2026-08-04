@@ -117,6 +117,19 @@ pub struct IngestMediaResult {
     pub blob_uri: String,
 }
 
+/// What [`crate::Memory::observe`] returns: the memories the engine chose to
+/// keep (empty when the turn was filler — that's success, not an error) plus how
+/// many candidates it found before the dedupe/budget pass. `saved.len() <=
+/// candidate_count`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObserveResponse {
+    #[serde(default)]
+    pub saved: Vec<MemoryItem>,
+    #[serde(default)]
+    pub candidate_count: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReflectResult {

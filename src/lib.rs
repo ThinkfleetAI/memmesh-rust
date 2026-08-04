@@ -3,15 +3,17 @@
 //!
 //! ```no_run
 //! # async fn run() -> Result<(), memmesh::Error> {
-//! use memmesh::{MemMesh, Subject, Observe};
+//! use memmesh::{MemMesh, Observe};
 //!
 //! let mm = MemMesh::new("sk-...", "proj_...");
 //!
-//! mm.memory().observe(Observe {
-//!     subject: Some(Subject::new("contact", "sarah")),
-//!     content: "Prefers email over phone.".into(),
+//! // Hand the engine the raw turn — it extracts what's worth keeping and
+//! // returns { saved, candidate_count }; filler comes back as saved: [].
+//! let res = mm.memory().observe(Observe {
+//!     text: Some("Sarah prefers email over phone.".into()),
 //!     ..Default::default()
 //! }).await?;
+//! println!("kept {} of {}", res.saved.len(), res.candidate_count);
 //!
 //! let hits = mm.memory().search("how to reach sarah", 5).await?;
 //! let insights = mm.memory().reflect(Default::default()).await?;
