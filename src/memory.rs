@@ -51,6 +51,17 @@ pub struct Observe {
     pub text: Option<String>,
     /// Who said `text` — defaults to `"user"`. Only used on the `text` path.
     pub role: Option<String>,
+    /// The end user this turn belongs to — your own identifier, not a MemMesh
+    /// one. Recorded as provenance on whatever the engine keeps.
+    ///
+    /// NOT a tenancy boundary: search filters `chatIdentityId IS NULL OR = $1`,
+    /// permissively by design, so project-wide memories stay visible to every
+    /// caller. Isolating one end user's memories needs a project per tenant.
+    pub user_id: Option<String>,
+    /// The agent or assistant that produced this turn. Provenance only.
+    pub agent_id: Option<String>,
+    /// Conversation/thread id, so turns from one session stay linkable.
+    pub session_id: Option<String>,
     pub subject: Option<Subject>,
     /// DEPRECATED — a pre-decided fact stored verbatim, bypassing extraction.
     /// Prefer `text` and let the engine decide what to keep.
@@ -262,6 +273,18 @@ impl Memory {
             });
             if let Some(t) = &o.occurred_at {
                 body["occurredAt"] = json!(t);
+            }
+            // Provenance, all optional server-side. Inserted only when set, so a
+            // turn without them is indistinguishable from one made by an older
+            // client rather than carrying explicit nulls.
+            if let Some(v) = &o.user_id {
+                body["userId"] = json!(v);
+            }
+            if let Some(v) = &o.agent_id {
+                body["agentId"] = json!(v);
+            }
+            if let Some(v) = &o.session_id {
+                body["sessionId"] = json!(v);
             }
             return self.c.send(Method::POST, "/memory/observe", Some(&body)).await;
         }
@@ -1195,6 +1218,44 @@ mod tests {
         assert_eq!(b["text"], "Sarah prefers email over phone.");
         assert_eq!(b["role"], "user"); // defaulted
         assert_eq!(b["occurredAt"], "2024-01-02T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn observe_text_forwards_identity_provenance() {
+        let body = format!(r#"{{"saved":[{}],"candidateCount":1}}"#, item_json("m1"));
+        let (base, rx) = mock_server(vec![body]);
+        client(&base)
+            .memory()
+            .observe(Observe {
+                text: Some("I just moved to Denver.".into()),
+                user_id: Some("user-123".into()),
+                agent_id: Some("agent-9".into()),
+                session_id: Some("thread-456".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let b: Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert_eq!(b["userId"], "user-123");
+        assert_eq!(b["agentId"], "agent-9");
+        assert_eq!(b["sessionId"], "thread-456");
+    }
+
+    #[tokio::test]
+    async fn observe_text_omits_identity_when_unset() {
+        // An older call site must produce the request it always did — the
+        // fields are absent, not explicit nulls.
+        let body = format!(r#"{{"saved":[{}],"candidateCount":1}}"#, item_json("m1"));
+        let (base, rx) = mock_server(vec![body]);
+        client(&base)
+            .memory()
+            .observe(Observe { text: Some("hello".into()), ..Default::default() })
+            .await
+            .unwrap();
+        let b: Value = serde_json::from_str(&rx.recv().unwrap().body).unwrap();
+        assert!(b.get("userId").is_none());
+        assert!(b.get("agentId").is_none());
+        assert!(b.get("sessionId").is_none());
     }
 
     #[tokio::test]

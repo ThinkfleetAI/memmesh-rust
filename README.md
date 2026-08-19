@@ -63,3 +63,33 @@ async fn main() -> Result<(), memmesh::Error> {
 Errors are [`memmesh::Error`] (`Http`, `Decode`, `Api { status, body }`).
 
 Apache-2.0 · [memmesh.ai](https://memmesh.ai) · [docs](https://docs.memmesh.ai)
+
+## Knowledge graph
+
+Observing doesn't only produce embeddable rows — extraction also resolves
+entities and writes typed edges between them. That graph reaches facts no single
+memory states outright.
+
+```rust
+use memmesh::graph::{ListEntities, Traverse};
+
+// How much of what you remember made it into the graph?
+let st = mm.graph().stats().await?;
+println!("{} entities, {} edges", st.entity_count, st.edge_count);
+
+// Multi-hop: who does Sarah ultimately report to?
+let ents = mm.graph().list_entities(ListEntities { search: Some("Sarah".into()), ..Default::default() }).await?;
+let chain = mm.graph().traverse(&ents[0].id, Traverse {
+    hops: Some(2),
+    predicates: Some(vec!["member_of".into(), "led_by".into()]),
+    ..Default::default()
+}).await?;
+```
+
+Edges come back hydrated — `subject` and `object` are full entities, not ids.
+
+Use `stats()`, not `list_entities(..).len()`, for any "how big is it" question:
+the list routes page, so their length is the page size, not the total.
+
+Read-only. Entities and edges are written by extraction during `observe()`.
+

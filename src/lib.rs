@@ -37,6 +37,7 @@ pub mod brains;
 pub mod consent;
 pub mod context;
 pub mod financial;
+pub mod graph;
 pub mod lattice;
 pub mod memory;
 pub mod resources;
@@ -47,6 +48,11 @@ pub use consent::Consent;
 pub use context::Context;
 pub use error::Error;
 pub use financial::Financial;
+pub use graph::{
+    EntityWithEdges, ExtractionState, Graph, GraphStats, GraphTraversalEdge, ListEntities,
+    MemoryEntity,
+    Traverse,
+};
 pub use interceptor::{BoxFuture, RequestInterceptor, ResponseInterceptor};
 pub use lattice::Lattice;
 pub use memory::{
@@ -249,6 +255,11 @@ impl MemMesh {
     /// The brains marketplace registry (create / list / get / update / delete).
     pub fn brains(&self) -> Brains {
         Brains { c: self.inner.clone() }
+    }
+    /// The knowledge graph extraction builds from observed memory —
+    /// entities, typed edges, traversal, and counts.
+    pub fn graph(&self) -> Graph {
+        Graph { c: self.inner.clone() }
     }
     /// Subject-level consent / opt-out, recorded client-side as `consent` memories.
     pub fn consent(&self) -> Consent {
